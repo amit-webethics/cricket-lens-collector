@@ -1,0 +1,8 @@
+{
+  "actorSpecification": 1,
+  "name": "cricket-lens-collector",
+  "title": "The Cricket Lens \u2014 Excel Collector",
+  "version": "0.1",
+  "dockerfile": "../Dockerfile",
+  "input": "./input_schema.json"
+}

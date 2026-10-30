@@ -1,0 +1,42 @@
+{
+  "title": "Cricket story collection",
+  "type": "object",
+  "schemaVersion": 1,
+  "properties": {
+    "lookbackHours": {
+      "title": "Look back (hours)",
+      "type": "integer",
+      "default": 72,
+      "minimum": 1,
+      "maximum": 720,
+      "editor": "number"
+    },
+    "maxItemsPerSource": {
+      "title": "Maximum stories per source",
+      "type": "integer",
+      "default": 100,
+      "minimum": 1,
+      "maximum": 500,
+      "editor": "number"
+    },
+    "sources": {
+      "title": "RSS / Atom sources",
+      "type": "array",
+      "editor": "json",
+      "description": "Each entry must contain name and an HTTPS RSS/Atom feed URL.",
+      "prefill": [
+        {
+          "name": "BBC Cricket",
+          "url": "https://feeds.bbci.co.uk/sport/cricket/rss.xml"
+        },
+        {
+          "name": "ESPNcricinfo",
+          "url": "https://www.espncricinfo.com/rss/content/story/feeds/0.xml"
+        }
+      ]
+    }
+  },
+  "required": [
+    "sources"
+  ]
+}
