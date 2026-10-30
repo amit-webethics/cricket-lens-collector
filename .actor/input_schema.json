@@ -5,6 +5,7 @@
   "properties": {
     "lookbackHours": {
       "title": "Look back (hours)",
+      "description": "Collect stories published within the last specified number of hours. Stories without a date are included and flagged for review.",
       "type": "integer",
       "default": 72,
       "minimum": 1,
@@ -13,6 +14,7 @@
     },
     "maxItemsPerSource": {
       "title": "Maximum stories per source",
+      "description": "Maximum number of feed entries to check from each source during one run.",
       "type": "integer",
       "default": 100,
       "minimum": 1,
@@ -21,9 +23,9 @@
     },
     "sources": {
       "title": "RSS / Atom sources",
+      "description": "Cricket feeds to check. Each entry must contain a name and an HTTPS RSS or Atom feed URL.",
       "type": "array",
       "editor": "json",
-      "description": "Each entry must contain name and an HTTPS RSS/Atom feed URL.",
       "prefill": [
         {
           "name": "BBC Cricket",
@@ -36,7 +38,5 @@
       ]
     }
   },
-  "required": [
-    "sources"
-  ]
+  "required": ["sources"]
 }
