@@ -5,38 +5,21 @@
   "properties": {
     "lookbackHours": {
       "title": "Look back (hours)",
-      "description": "Collect stories published within the last specified number of hours. Stories without a date are included and flagged for review.",
       "type": "integer",
       "default": 72,
       "minimum": 1,
       "maximum": 720,
-      "editor": "number"
+      "editor": "number",
+      "description": "Hours of recent coverage to include."
     },
     "maxItemsPerSource": {
       "title": "Maximum stories per source",
-      "description": "Maximum number of feed entries to check from each source during one run.",
       "type": "integer",
       "default": 100,
       "minimum": 1,
       "maximum": 500,
-      "editor": "number"
-    },
-    "sources": {
-      "title": "RSS / Atom sources",
-      "description": "Cricket feeds to check. Each entry must contain a name and an HTTPS RSS or Atom feed URL.",
-      "type": "array",
-      "editor": "json",
-      "prefill": [
-        {
-          "name": "BBC Cricket",
-          "url": "https://feeds.bbci.co.uk/sport/cricket/rss.xml"
-        },
-        {
-          "name": "ESPNcricinfo",
-          "url": "https://www.espncricinfo.com/rss/content/story/feeds/0.xml"
-        }
-      ]
+      "editor": "number",
+      "description": "Maximum stories checked per publisher. Sources are ESPNcricinfo and Cricbuzz."
     }
-  },
-  "required": ["sources"]
+  }
 }

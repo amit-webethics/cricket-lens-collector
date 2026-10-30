@@ -1,31 +1,28 @@
-# The Cricket Lens — Excel Collector v0.1
+# The Cricket Lens — ESPNcricinfo and Cricbuzz collector
 
-A Python Apify Actor that collects configured cricket RSS / Atom feeds and produces an editable Excel workbook. No website connection, AI account, or publishing automation is required.
+This Python Apify Actor collects ESPNcricinfo RSS and Cricbuzz public news-page metadata. It produces the existing dataset row format, OUTPUT.xlsx and SOURCE_STATUS, so the website success webhook continues to work.
 
-## Run on Apify
-1. Create a new custom Actor using a Python template in your Apify account.
-2. Replace the template source with this project's files, including `.actor/`, `src/`, Dockerfile and requirements.txt. Alternatively use the Apify CLI from this directory: `apify login`, then `apify push`.
-3. Build the Actor. In Input use the supplied sources and a 72-hour lookback for the first trial. `INPUT.json` is a copyable example.
-4. Run it. Open the run's Storage / Key-value store and download `OUTPUT.xlsx`. Dataset output also contains story rows.
-5. Check the Source status tab, then review and edit the Stories tab. Keep your edited copy separately: each run creates a new workbook.
-6. After a successful trial, add an Apify schedule, for example every 4 hours (`0 */4 * * *`) with timezone Asia/Kolkata. Scheduling is not activated by this package.
+## Update your existing GitHub Actor
+1. Replace the files in `amit-webethics/cricket-lens-collector` with the files in this package, including `.actor/`, `src/`, INPUT.json, README.md and tests/.
+2. Commit the changes to main. In Apify, rebuild the existing Actor from GitHub.
+3. Keep `lookbackHours: 72`; set `maxItemsPerSource` as needed (default 100). Saved BBC/custom `sources` input is intentionally ignored. This version uses only ESPNcricinfo and Cricbuzz.
+4. Run a manual trial and inspect SOURCE_STATUS. The existing webhook imports results to the website after a successful run, provided the webhook is already configured.
+5. Keep your existing schedule. If creating a new one, twice daily at 09:00 and 18:00 Asia/Kolkata uses `0 9,18 * * *`. This package does not activate or change schedules.
 
-## Workbook
-Stories includes original headline, source link, publication and collection dates, source summary, author, source tags, suggested type, date checks, review status, and blank editorial fields. Source status shows failures explicitly. Instructions explains review steps.
+## Source labels and duplicates
+Every row includes its publisher name, original headline, source URL, source publication date (when available) and collection time. Excel retains individual source rows for traceability. The website grouping update combines strong matches in the admin and offers manual merge for uncertain coverage; it retains the original records and publisher links.
 
-## Scope and limits
-- Starts with candidate BBC Cricket and ESPNcricinfo feeds. Live availability must be tested from Apify; sites can change or block feeds. Add further regional, women's and associate cricket feeds to extend coverage.
-- Collects only what feeds supply, not full articles or images. Summaries can be empty. No AI-generated summaries or drafts.
-- News / preview / opinion / report classification is a headline keyword suggestion and needs review. Teams and series are entered manually in v0.1.
-- Deduplicates tracking variants of the same URL within a run. Different sources covering the same event are retained for comparison. Runs intentionally overlap and do not share an exclusion history, so an unsuccessful download cannot silently lose stories.
-- Uses published date, falling back to updated date. Undated entries are included and flagged; future dates are flagged. Reads up to maxItemsPerSource feed entries per source. Feed providers determine history depth.
-- Source text is retained as reference, not a publish-ready article. Review source access/reuse conditions and use your own reporting and appropriately licensed images.
-- No paywall or block bypass. No automatic publication. No API keys are shipped.
-- Apify execution may incur account usage charges. Start with one manual run.
+The Actor deduplicates canonical URLs within each run. Persistent cross-run URL deduplication and cross-source grouping happen in the website, not the workbook. Runs intentionally overlap.
 
-## Local run
-Python 3.12 recommended. `pip install -r requirements.txt`, then `python -m src.main`.
-Local SDK input can be put in `storage/key_value_stores/default/INPUT.json`; otherwise the bundled INPUT.json is used. Output is in the local default key-value store.
+## Scope
+- ESPNcricinfo supplies RSS headlines, summaries and tags. Cricbuzz supplies news-listing links and article title, description, section and publication-date metadata where available.
+- Only stories linked from the current listing/feed are checked. maxItemsPerSource is an upper bound, not a guaranteed number. No archive/pagination crawling or full article extraction is included.
+- Missing dates and future dates are flagged. Source status reports feed failures, parse warnings and partial Cricbuzz article failures. A failure of both publishers fails the Actor run.
+- Classification is a suggestion; confirm the section, category, teams and series before publishing. Source metadata cannot guarantee classification accuracy.
+- Source summaries are reference material. Write original reporting, verify facts and select images you have permission to use.
+- No paywall bypass, AI model call, API key or automatic publication is included in this Actor. The website handles optional section drafting separately.
 
-## Validation
-Run `python -m unittest discover -s tests`. Tests use mocked feed responses and workbook inspection, not live source requests. Live feed availability and an Apify cloud build remain deployment checks.
+## Local development
+Use Python 3.12. Install `pip install -r requirements.txt`, then run `python -m src.main`. Local SDK input may be placed at `storage/key_value_stores/default/INPUT.json`; otherwise INPUT.json is used.
+
+Run `python -m unittest discover -s tests -v` from this directory. All five tests passed, including Cricbuzz metadata, partial failures, source labels, URL filtering and Excel safety. A workspace smoke test fetched one Cricbuzz story; ESPNcricinfo timed out from this environment. Build and test in Apify before relying on scheduled collection.

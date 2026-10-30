@@ -3,6 +3,8 @@ import hashlib
 import io
 import json
 import re
+from html.parser import HTMLParser
+from urllib.parse import urljoin
 from datetime import datetime, timedelta, timezone
 from html import unescape
 from pathlib import Path
@@ -59,11 +61,85 @@ def make_row(entry, source, now, cutoff):
         'Check future date' if stamp and stamp > now + timedelta(minutes=10) else ('Available' if stamp else 'Missing — check source'),
         'New', '', '', '', '', '']))
 
+DEFAULT_SOURCES = [
+    {'name': 'ESPNcricinfo', 'url': 'https://www.espncricinfo.com/rss/content/story/feeds/0.xml'},
+    {'name': 'Cricbuzz', 'url': 'https://www.cricbuzz.com/cricket-news', 'type': 'cricbuzz'},
+]
+
+class NewsLinks(HTMLParser):
+    def __init__(self):
+        super().__init__(); self.links = []; self.current = None
+    def handle_starttag(self, tag, attrs):
+        attrs = dict(attrs)
+        if tag == 'a' and re.match(r'^/cricket-news/\d+/', attrs.get('href', '')):
+            self.current = [urljoin('https://www.cricbuzz.com', attrs['href']), []]
+    def handle_data(self, data):
+        if self.current is not None: self.current[1].append(data)
+    def handle_endtag(self, tag):
+        if tag == 'a' and self.current is not None:
+            self.links.append((self.current[0], clean(' '.join(self.current[1])))); self.current = None
+
+class ArticleMetadata(HTMLParser):
+    def __init__(self):
+        super().__init__(); self.meta = {}; self.scripts = []; self.buffer = None
+    def handle_starttag(self, tag, attrs):
+        attrs = dict(attrs)
+        if tag == 'meta': self.meta[attrs.get('property') or attrs.get('name', '')] = attrs.get('content', '')
+        if tag == 'script' and attrs.get('type') == 'application/ld+json': self.buffer = []
+    def handle_data(self, data):
+        if self.buffer is not None: self.buffer.append(data)
+    def handle_endtag(self, tag):
+        if tag == 'script' and self.buffer is not None:
+            try: self.scripts.append(json.loads(''.join(self.buffer)))
+            except ValueError: pass
+            self.buffer = None
+
+def cricbuzz_entry(html, url, fallback):
+    parser = ArticleMetadata(); parser.feed(html)
+    articles = []
+    def walk(value):
+        if isinstance(value, dict):
+            types = value.get('@type', [])
+            if isinstance(types, str): types = [types]
+            if any(t in ('NewsArticle', 'Article', 'BlogPosting') for t in types): articles.append(value)
+            for child in value.values(): walk(child)
+        elif isinstance(value, list):
+            for child in value: walk(child)
+    for script in parser.scripts: walk(script)
+    data = articles[0] if articles else {}
+    title = data.get('headline') or parser.meta.get('og:title') or fallback
+    summary = data.get('description') or parser.meta.get('og:description') or parser.meta.get('description', '')
+    entry = {'title': title, 'summary': summary, 'link': url, 'tags': []}
+    stamp = data.get('datePublished') or parser.meta.get('article:published_time')
+    if stamp:
+        try: entry['published_parsed'] = datetime.fromisoformat(stamp.replace('Z', '+00:00')).astimezone(timezone.utc).timetuple()
+        except (ValueError, TypeError): pass
+    category = data.get('articleSection') or parser.meta.get('article:section')
+    if category: entry['tags'] = [{'term': category if isinstance(category, str) else ', '.join(category)}]
+    return entry
+
+async def cricbuzz_entries(client, html, limit):
+    parser = NewsLinks(); parser.feed(html)
+    unique = dict(parser.links)
+    if not unique: raise ValueError('No Cricbuzz story links found; check the page structure')
+    entries = []; errors = []
+    for url, title in list(unique.items())[:limit]:
+        try:
+            response = await client.get(url); response.raise_for_status()
+            if len(response.content) > 10_000_000: raise ValueError('Article exceeds 10 MB')
+            entries.append(cricbuzz_entry(response.text, url, title))
+        except Exception:
+            errors.append(url)
+        await asyncio.sleep(0.25)
+    if not entries: raise ValueError('Cricbuzz article metadata could not be fetched')
+    return entries, len(errors)
+
 async def collect(config):
     now = datetime.now(timezone.utc)
     hours = max(1, min(720, int(config.get('lookbackHours', 72))))
     limit = max(1, min(500, int(config.get('maxItemsPerSource', 100))))
-    sources = config.get('sources', [])
+    # Saved Apify inputs may still contain BBC: use the requested two publishers only.
+    sources = DEFAULT_SOURCES
     if not isinstance(sources, list) or not sources:
         raise ValueError('Provide at least one RSS / Atom source.')
     rows, reports, seen = [], [], set()
@@ -79,20 +155,26 @@ async def collect(config):
                 response.raise_for_status()
                 if len(response.content) > 10_000_000:
                     raise ValueError('Feed exceeds 10 MB limit')
-                feed = feedparser.parse(response.content)
-                if not feed.get('version'):
-                    raise ValueError('Response is not a recognised RSS / Atom feed')
-                for entry in feed.entries[:limit]:
+                warning = ''
+                if source.get('type') == 'cricbuzz':
+                    entries, failed = await cricbuzz_entries(client, response.text, limit)
+                    if failed: warning = f'{failed} article pages failed; retry on the next run'
+                else:
+                    feed = feedparser.parse(response.content)
+                    if not feed.get('version'): raise ValueError('Response is not a recognised RSS / Atom feed')
+                    entries = feed.entries
+                    if feed.bozo: warning = 'Feed has parse warnings; check results'
+                for entry in entries[:limit]:
                     row = make_row(entry, name, now, now - timedelta(hours=hours))
                     if row and row['Source URL'] not in seen:
                         seen.add(row['Source URL'])
                         rows.append(row)
                         report['Stories added'] += 1
-                report['Status'] = 'Warning' if feed.bozo else 'OK'
-                report['Detail'] = 'Feed has parse warnings; check results' if feed.bozo else ''
+                report['Status'] = 'Warning' if warning else 'OK'
+                report['Detail'] = warning
             except Exception as exc:
                 report['Status'] = 'Failed'
-                report['Detail'] = str(exc)[:400]
+                report['Detail'] = (type(exc).__name__ + ': ' + str(exc))[:400]
             reports.append(report)
     rows.sort(key=lambda row: row['Published UTC'], reverse=True)
     return rows, reports
