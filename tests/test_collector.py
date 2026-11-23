@@ -16,19 +16,17 @@ class CollectorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(wb['Stories']['H2'].value,'Reference')
         self.assertEqual(wb['Stories']['L2'].value,'New')
         self.assertEqual(len(wb['Stories'].data_validations.dataValidation),1)
-    async def test_collection_and_failures(self):
-        import httpx
-        feed='<rss version="2.0"><channel><title>Cricket</title><item><title>Match preview</title><link>https://example.com/a?utm_source=test</link></item><item><title>Duplicate</title><link>https://example.com/a</link></item></channel></rss>'
-        def respond(request):
-            return httpx.Response(200,text=feed) if request.url.host=='www.espncricinfo.com' else httpx.Response(403)
-        original = httpx.AsyncClient
-        with patch('src.main.httpx.AsyncClient',side_effect=lambda **kw:original(transport=httpx.MockTransport(respond),**kw)):
-            rows, reports=await collect({'sources':[{'name':'Good','url':'https://good.example/rss'},{'name':'Bad','url':'https://bad.example/rss'}]})
-        self.assertEqual(len(rows),1)
-        self.assertEqual(rows[0]['Suggested type'],'Preview')
-        self.assertEqual([r['Status'] for r in reports],['OK','Failed'])
-        self.assertEqual(rows[0]['Source'],'ESPNcricinfo')
-        self.assertEqual([r['Source'] for r in reports],['ESPNcricinfo','Cricbuzz'])
+    def test_homepage_relative_and_absolute_article_links(self):
+        parser = NewsLinks()
+        parser.feed('<a href="/cricket-news/101/latest?utm_source=home">Latest</a>'
+                    '<a href="https://www.cricbuzz.com/cricket-news/102/opinion">Opinion</a>'
+                    '<a href="/live-cricket-scores/103">Score</a>'
+                    '<a href="https://example.com/cricket-news/104/external">External</a>')
+        self.assertEqual(parser.links, [
+            ('https://www.cricbuzz.com/cricket-news/101/latest', 'Latest'),
+            ('https://www.cricbuzz.com/cricket-news/102/opinion', 'Opinion'),
+        ])
+
     def test_old_story_filtered(self):
         now=datetime.now(timezone.utc)
         self.assertIsNone(make_row({'title':'Old','link':'https://example.com/old','published_parsed':(2020,1,1,0,0,0,0,0,0)},'Test',now,now-timedelta(hours=72)))
@@ -47,15 +45,13 @@ class CollectorTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_cricbuzz_collection_keeps_source_and_handles_partial_failure(self):
         import httpx
-        feed='<rss version="2.0"><channel><title>Cricket</title></channel></rss>'
         listing='<a href="/cricket-news/1/story">Story</a><a href="/cricket-news/2/failed">Other</a>'
         def respond(request):
-            if request.url.host=='www.espncricinfo.com': return httpx.Response(200,text=feed)
-            if request.url.path=='/cricket-news': return httpx.Response(200,text=listing)
+            if request.url.path=='/': return httpx.Response(200,text=listing)
             if request.url.path=='/cricket-news/1/story': return httpx.Response(200,text='<meta property="og:title" content="Squad announced"><meta property="og:description" content="Two players return">')
             return httpx.Response(403)
         original=httpx.AsyncClient
         with patch('src.main.httpx.AsyncClient',side_effect=lambda **kw:original(transport=httpx.MockTransport(respond),**kw)):
-            rows,reports=await collect({'maxItemsPerSource':2})
+            rows,reports=await collect({'maxItemsPerSource':1})
         self.assertEqual(len(rows),1);self.assertEqual(rows[0]['Source'],'Cricbuzz')
-        self.assertEqual(reports[1]['Status'],'Warning');self.assertIn('1 article pages failed',reports[1]['Detail'])
+        self.assertEqual(reports[0]['Status'],'Warning');self.assertIn('1 article pages failed',reports[1]['Detail'])

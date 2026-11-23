@@ -62,8 +62,7 @@ def make_row(entry, source, now, cutoff):
         'New', '', '', '', '', '']))
 
 DEFAULT_SOURCES = [
-    {'name': 'ESPNcricinfo', 'url': 'https://www.espncricinfo.com/rss/content/story/feeds/0.xml'},
-    {'name': 'Cricbuzz', 'url': 'https://www.cricbuzz.com/cricket-news', 'type': 'cricbuzz'},
+    {'name': 'Cricbuzz', 'url': 'https://www.cricbuzz.com/', 'type': 'cricbuzz'},
 ]
 
 class NewsLinks(HTMLParser):
@@ -71,8 +70,17 @@ class NewsLinks(HTMLParser):
         super().__init__(); self.links = []; self.current = None
     def handle_starttag(self, tag, attrs):
         attrs = dict(attrs)
-        if tag == 'a' and re.match(r'^/cricket-news/\d+/', attrs.get('href', '')):
-            self.current = [urljoin('https://www.cricbuzz.com', attrs['href']), []]
+        if tag != 'a':
+            return
+        self.current = None
+        try:
+            link = urlsplit(urljoin('https://www.cricbuzz.com/', attrs.get('href') or ''))
+            if (link.scheme != 'https' or link.netloc.lower() not in ('cricbuzz.com', 'www.cricbuzz.com')
+                    or not re.fullmatch(r'/cricket-news/\d+(?:/[^/]+)?/?', link.path)):
+                return
+            self.current = [urlunsplit(('https', 'www.cricbuzz.com', link.path.rstrip('/'), '', '')), []]
+        except ValueError:
+            return
     def handle_data(self, data):
         if self.current is not None: self.current[1].append(data)
     def handle_endtag(self, tag):
@@ -118,12 +126,17 @@ def cricbuzz_entry(html, url, fallback):
     if category: entry['tags'] = [{'term': category if isinstance(category, str) else ', '.join(category)}]
     return entry
 
-async def cricbuzz_entries(client, html, limit):
+async def cricbuzz_entries(client, html):
     parser = NewsLinks(); parser.feed(html)
-    unique = dict(parser.links)
+    unique = {}
+    for url, title in parser.links:
+        story_id = urlsplit(url).path.split('/')[2]
+        previous = unique.get(story_id)
+        if not previous or (title and (not previous[1] or len(url) > len(previous[0]))):
+            unique[story_id] = (url, title)
     if not unique: raise ValueError('No Cricbuzz story links found; check the page structure')
     entries = []; errors = []
-    for url, title in list(unique.items())[:limit]:
+    for url, title in unique.values():
         try:
             response = await client.get(url); response.raise_for_status()
             if len(response.content) > 10_000_000: raise ValueError('Article exceeds 10 MB')
@@ -138,7 +151,7 @@ async def collect(config):
     now = datetime.now(timezone.utc)
     hours = max(1, min(720, int(config.get('lookbackHours', 72))))
     limit = max(1, min(500, int(config.get('maxItemsPerSource', 100))))
-    # Saved Apify inputs may still contain BBC: use the requested two publishers only.
+    # Use the Cricbuzz homepage as the collection source.
     sources = DEFAULT_SOURCES
     if not isinstance(sources, list) or not sources:
         raise ValueError('Provide at least one RSS / Atom source.')
@@ -157,14 +170,14 @@ async def collect(config):
                     raise ValueError('Feed exceeds 10 MB limit')
                 warning = ''
                 if source.get('type') == 'cricbuzz':
-                    entries, failed = await cricbuzz_entries(client, response.text, limit)
+                    entries, failed = await cricbuzz_entries(client, response.text)
                     if failed: warning = f'{failed} article pages failed; retry on the next run'
                 else:
                     feed = feedparser.parse(response.content)
                     if not feed.get('version'): raise ValueError('Response is not a recognised RSS / Atom feed')
                     entries = feed.entries
                     if feed.bozo: warning = 'Feed has parse warnings; check results'
-                for entry in entries[:limit]:
+                for entry in (entries if source.get('type') == 'cricbuzz' else entries[:limit]):
                     row = make_row(entry, name, now, now - timedelta(hours=hours))
                     if row and row['Source URL'] not in seen:
                         seen.add(row['Source URL'])
