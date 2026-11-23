@@ -55,3 +55,27 @@ class CollectorTests(unittest.IsolatedAsyncioTestCase):
             rows,reports=await collect({'maxItemsPerSource':1})
         self.assertEqual(len(rows),1);self.assertEqual(rows[0]['Source'],'Cricbuzz')
         self.assertEqual(reports[0]['Status'],'Warning');self.assertIn('1 article pages failed',reports[1]['Detail'])
+
+    async def test_homepage_prefers_middle_then_left_then_right(self):
+        import httpx
+        from src.main import cricbuzz_entries
+        html = (
+            '<h2>Latest News</h2><a href="/cricket-news/10/left">Left</a>'
+            '<a href="/cricket-news/11/shared">Shared on left</a>'
+            '<h3>Featured Videos</h3><a href="/cricket-news/12/right">Right</a>'
+            '<h2>Top <span>Stories</span></h2><a href="/cricket-news/13/middle">Middle</a>'
+            '<a href="/cricket-news/11/shared">Shared in middle</a>'
+        )
+        requested = []
+        def respond(request):
+            requested.append(request.url.path)
+            return httpx.Response(200, text='<meta property="og:title" content="Story">')
+        async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+            entries, failures = await cricbuzz_entries(client, html)
+        self.assertEqual(failures, 0)
+        self.assertEqual(requested, [
+            '/cricket-news/13/middle', '/cricket-news/11/shared', '/cricket-news/10/left', '/cricket-news/12/right',
+        ])
+        self.assertEqual([entry['homepage_section'] for entry in entries], [
+            'Top Stories', 'Top Stories', 'Latest News', 'Right sidebar / other',
+        ])

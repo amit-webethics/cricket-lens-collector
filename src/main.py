@@ -65,11 +65,22 @@ DEFAULT_SOURCES = [
     {'name': 'Cricbuzz', 'url': 'https://www.cricbuzz.com/', 'type': 'cricbuzz'},
 ]
 
+HOMEPAGE_SECTIONS = ('Top Stories', 'Latest News', 'Right sidebar / other')
+
 class NewsLinks(HTMLParser):
     def __init__(self):
-        super().__init__(); self.links = []; self.current = None
+        super().__init__()
+        self.links = []
+        self.current = None
+        self.section = HOMEPAGE_SECTIONS[2]
+        self.sections = []
+        self.heading = None
+        self.heading_parts = []
     def handle_starttag(self, tag, attrs):
         attrs = dict(attrs)
+        if tag in ('h1', 'h2', 'h3', 'h4'):
+            self.heading = tag
+            self.heading_parts = []
         if tag != 'a':
             return
         self.current = None
@@ -82,10 +93,24 @@ class NewsLinks(HTMLParser):
         except ValueError:
             return
     def handle_data(self, data):
-        if self.current is not None: self.current[1].append(data)
+        if self.heading is not None:
+            self.heading_parts.append(data)
+        if self.current is not None:
+            self.current[1].append(data)
     def handle_endtag(self, tag):
         if tag == 'a' and self.current is not None:
-            self.links.append((self.current[0], clean(' '.join(self.current[1])))); self.current = None
+            self.links.append((self.current[0], clean(' '.join(self.current[1]))))
+            self.sections.append(self.section)
+            self.current = None
+        if tag == self.heading:
+            heading = ' '.join(' '.join(self.heading_parts).lower().split())
+            if heading == 'top stories':
+                self.section = HOMEPAGE_SECTIONS[0]
+            elif heading == 'latest news':
+                self.section = HOMEPAGE_SECTIONS[1]
+            elif heading in ('featured videos', 'latest photos', 'schedule', 'featured', 'more news'):
+                self.section = HOMEPAGE_SECTIONS[2]
+            self.heading = None
 
 class ArticleMetadata(HTMLParser):
     def __init__(self):
@@ -129,18 +154,21 @@ def cricbuzz_entry(html, url, fallback):
 async def cricbuzz_entries(client, html):
     parser = NewsLinks(); parser.feed(html)
     unique = {}
-    for url, title in parser.links:
+    candidates = zip(parser.links, parser.sections)
+    for (url, title), section in sorted(candidates, key=lambda candidate: HOMEPAGE_SECTIONS.index(candidate[1])):
         story_id = urlsplit(url).path.split('/')[2]
         previous = unique.get(story_id)
-        if not previous or (title and (not previous[1] or len(url) > len(previous[0]))):
-            unique[story_id] = (url, title)
+        if not previous or (previous[2] == section and title and (not previous[1] or len(url) > len(previous[0]))):
+            unique[story_id] = (url, title, section)
     if not unique: raise ValueError('No Cricbuzz story links found; check the page structure')
     entries = []; errors = []
-    for url, title in unique.values():
+    for url, title, section in unique.values():
         try:
             response = await client.get(url); response.raise_for_status()
             if len(response.content) > 10_000_000: raise ValueError('Article exceeds 10 MB')
-            entries.append(cricbuzz_entry(response.text, url, title))
+            entry = cricbuzz_entry(response.text, url, title)
+            entry['homepage_section'] = section
+            entries.append(entry)
         except Exception:
             errors.append(url)
         await asyncio.sleep(0.25)
@@ -169,6 +197,7 @@ async def collect(config):
                 if len(response.content) > 10_000_000:
                     raise ValueError('Feed exceeds 10 MB limit')
                 warning = ''
+                section_counts = dict.fromkeys(HOMEPAGE_SECTIONS, 0)
                 if source.get('type') == 'cricbuzz':
                     entries, failed = await cricbuzz_entries(client, response.text)
                     if failed: warning = f'{failed} article pages failed; retry on the next run'
@@ -183,13 +212,17 @@ async def collect(config):
                         seen.add(row['Source URL'])
                         rows.append(row)
                         report['Stories added'] += 1
+                        if source.get('type') == 'cricbuzz':
+                            section_counts[entry['homepage_section']] += 1
                 report['Status'] = 'Warning' if warning else 'OK'
-                report['Detail'] = warning
+                detail = [warning] if warning else []
+                if source.get('type') == 'cricbuzz':
+                    detail.extend(f'{section}: {count}' for section, count in section_counts.items())
+                report['Detail'] = ' · '.join(detail)
             except Exception as exc:
                 report['Status'] = 'Failed'
                 report['Detail'] = (type(exc).__name__ + ': ' + str(exc))[:400]
             reports.append(report)
-    rows.sort(key=lambda row: row['Published UTC'], reverse=True)
     return rows, reports
 
 def workbook(rows, reports):
